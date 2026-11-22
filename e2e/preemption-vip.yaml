@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Pod
+metadata: {name: vip}
+spec:
+  priorityClassName: e2e-high
+  terminationGracePeriodSeconds: 1
+  nodeSelector: {kubernetes.io/hostname: WORKER}
+  containers:
+    - name: app
+      image: busybox:1.37
+      command: [sleep, "3600"]
+      resources:
+        requests: {cpu: CPU_REQUEST}

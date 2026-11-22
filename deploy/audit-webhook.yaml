@@ -1,0 +1,16 @@
+# kubeconfig for --audit-webhook-config-file. The kube-apiserver usually runs in the host
+# network, where cluster DNS names do not resolve: use the Service's ClusterIP.
+apiVersion: v1
+kind: Config
+clusters:
+  - name: kill-reason
+    cluster:
+      server: http://CLUSTER_IP/audit
+users:
+  - name: kill-reason
+    user:
+      token: AUDIT_TOKEN
+contexts:
+  - name: kill-reason
+    context: {cluster: kill-reason, user: kill-reason}
+current-context: kill-reason
