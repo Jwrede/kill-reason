@@ -4,7 +4,7 @@ import sys
 ip = sys.argv[1]
 s = sys.stdin.read()
 repl = [
-    ("image: ghcr.io/jwrede/kill-reason:latest", "image: kill-reason:e2e\n          imagePullPolicy: Never"),
+    ("image: REGISTRY/kill-reason:latest", "image: kill-reason:e2e\n          imagePullPolicy: Never"),
     ("--settle=40s", "--settle=8s"),
     ("      serviceAccountName: kill-reason\n",
      "      serviceAccountName: kill-reason\n"

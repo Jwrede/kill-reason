@@ -3,16 +3,23 @@
 kill-reason is a small Kubernetes controller that writes down why a container or pod ended and, when the API server's audit log can tell, who caused it. Each termination becomes one Kubernetes Event on the pod with a classified reason:
 
 ```
-$ kubectl -n e2e get events --field-selector source=kill-reason
-LAST SEEN   TYPE      REASON                OBJECT                MESSAGE
-...         Warning   OOMKilled             pod/oom               container hog: killed by the kernel OOM killer (memory limit 24Mi)
-...         Warning   LivenessProbeFailed   pod/liveness          container app: restarted by the kubelet after the liveness probe failed: Liveness probe failed: Get "http://10.244.1.4:8080/healthz": dial tcp 10.244.1.4:8080: connect: connection refused
-...         Normal    Rollout               pod/web-6d8c7-2kq9x   replaced during a rollout of Deployment web (now at revision 2) (change made with kubectl); actor: alice
-...         Warning   EvictedByAPI          pod/web-5f7b9-xq2lm   evicted through the Eviction API while node kill-reason-e2e-worker was cordoned (node drain) by kubectl; actor: bob
-...         Warning   Preempted             pod/victim            preempted by the scheduler for higher-priority pod e2e/vip on node kill-reason-e2e-worker (own priority class e2e-low)
+$ kill-reason explain -n e2e        # from the end-to-end test in CI (kind, Kubernetes v1.35.0)
+TIME                  NAMESPACE  POD                    CAUSE                DETAIL
+2026-11-22T05:59:18Z  e2e        oom                    OOMKilled            container hog: killed by the kernel OOM killer (memory limit 24Mi)
+2026-11-22T05:59:21Z  e2e        crash                  ContainerExited      container app: process exited with code 3
+2026-11-22T05:59:25Z  e2e        deadline               DeadlineExceeded     activeDeadlineSeconds (8) reached
+2026-11-22T05:59:26Z  e2e        liveness               LivenessProbeFailed  container app: restarted by the kubelet after the liveness probe failed: Liveness probe failed: Get "http://10.244.1.3:8080/healthz": dial tcp 10.244.1.3:8080: connect: connection refused
+2026-11-22T05:59:34Z  e2e        disk                   EvictedByKubelet     evicted by the kubelet on node kill-reason-e2e-worker: Pod ephemeral local storage usage exceeds the total limit of containers 1Mi.
+2026-11-22T05:59:43Z  e2e        web-676577cd5f-bbcqb   Deleted              deleted through the API by kubectl; actor: alice (impersonated by kubernetes-admin)
+2026-11-22T05:59:52Z  e2e        web-676577cd5f-5m5xw   ScaleDown            removed by a scale-down of Deployment web to 1 replicas (change made with kubectl); actor: alice (impersonated by kubernetes-admin)
+2026-11-22T06:00:03Z  e2e        web-676577cd5f-z2vbb   Rollout              replaced during a rollout of Deployment web (now at revision 2) (change made with kubectl); actor: alice (impersonated by kubernetes-admin)
+2026-11-22T06:00:14Z  e2e        web2-6784fd68bf-2w7mz  OwnerDeleted         deleted by the garbage collector because its owner ReplicaSet/web2-6784fd68bf was deleted; actor: system:serviceaccount:kube-system:generic-garbage-collector
+2026-11-22T06:00:24Z  e2e        web-7d5747cf5b-g5c5g   EvictedByAPI         evicted through the Eviction API while node kill-reason-e2e-worker was cordoned (node drain) by kubectl; actor: bob (impersonated by kubernetes-admin)
+2026-11-22T06:00:35Z  e2e        taintme                TaintEviction        deleted by the taint eviction controller: node kill-reason-e2e-worker has NoExecute taint e2e=now:NoExecute that the pod does not tolerate
+2026-11-22T06:00:47Z  e2e        victim                 Preempted            preempted by the scheduler for higher-priority pod e2e/vip on node kill-reason-e2e-worker (own priority class e2e-low)
 ```
 
-The same verdicts are printed as JSON lines, counted in `/metrics` and listed by `kill-reason explain`.
+The same text is the message of a Kubernetes Event on the pod (`kubectl get events --field-selector source=kill-reason`), and each verdict is also printed as a JSON line with its evidence and counted in `/metrics`.
 
 ## Why
 
@@ -62,7 +69,7 @@ Build the image (`docker build -t <registry>/kill-reason .`) or `go install gith
 ```sh
 kubectl create namespace kill-reason
 kubectl -n kill-reason create secret generic kill-reason-audit-token --from-literal=token="$(openssl rand -hex 24)"
-# edit the image in deploy/kill-reason.yaml first
+# replace REGISTRY in deploy/kill-reason.yaml with your registry first
 kubectl apply -f deploy/kill-reason.yaml
 kubectl -n kill-reason get service kill-reason -o jsonpath='{.spec.clusterIP}'
 ```
@@ -74,7 +81,7 @@ Audit webhook (self-managed control planes, for example kubeadm, kind, k3s, RKE2
 --audit-webhook-config-file=/etc/kubernetes/audit/webhook.yaml
 ```
 
-plus a hostPath mount of that directory. The kube-apiserver runs in the host network and does not resolve Service DNS names, so the webhook kubeconfig uses the ClusterIP; give the Service a fixed `clusterIP` if you prefer. `--settle` must be longer than `--audit-webhook-batch-max-wait` (default 30 s). If you already have an audit policy, merge the rules from `deploy/audit-policy.yaml` before your catch-all rule.
+plus a hostPath mount of that directory. The kube-apiserver runs in the host network and does not resolve Service DNS names, so the webhook kubeconfig uses the ClusterIP; give the Service a fixed `clusterIP` if you prefer. Over plain http the kube-apiserver did not send a bearer token in the end-to-end test (kill-reason answered 401), so the token is the last path segment of the webhook URL (`http://<ClusterIP>/audit/<token>`); a bearer header is accepted as well. The token ends up in the webhook kubeconfig on the control-plane nodes, and the traffic between kube-apiserver and kill-reason is not encrypted. `--settle` must be longer than `--audit-webhook-batch-max-wait` (default 30 s). If you already have an audit policy, merge the rules from `deploy/audit-policy.yaml` before your catch-all rule.
 
 Managed control planes (EKS, GKE, AKS) do not let you add an audit webhook; there kill-reason runs without actors.
 
@@ -93,7 +100,7 @@ Flags of `serve`: `--listen` (default `:8080`), `--settle`, `--namespace` (watch
 ## Tests
 
 - `go test -race ./...`: classification table tests for every cause, the audit webhook handler with a real `audit.k8s.io/v1` EventList payload (token check, impersonation, ignored controller updates, retention), and a controller test against the client-go fake clientset (OOM restart, then a rollout delete attributed to the user who patched the Deployment, no duplicate verdicts).
-- `e2e/run.sh` (in CI on every push and weekly): creates a kind cluster, adds the audit webhook flags to the real kube-apiserver static pod, deploys kill-reason and checks the Event for each of these scenarios: OOM kill, liveness probe failure, exit code 3, `activeDeadlineSeconds`, kubelet eviction for an ephemeral-storage limit, `kubectl delete --as alice`, `kubectl scale --as alice`, `kubectl rollout restart --as alice`, background cascade delete of a Deployment, `kubectl drain --as bob`, a NoExecute taint, and scheduler preemption between two priority classes. It also checks `kill-reason explain` and `/metrics`.
+- `e2e/run.sh` (in CI on every push and weekly; last run with kind v0.31.0 and Kubernetes v1.35.0): creates a kind cluster, adds the audit webhook flags to the real kube-apiserver static pod, deploys kill-reason and checks the Event for each of these scenarios: OOM kill, liveness probe failure, exit code 3, `activeDeadlineSeconds`, kubelet eviction for an ephemeral-storage limit, `kubectl delete --as alice`, `kubectl scale --as alice`, `kubectl rollout restart --as alice`, background cascade delete of a Deployment, `kubectl drain --as bob`, a NoExecute taint, and scheduler preemption between two priority classes. It also checks `kill-reason explain` and `/metrics`.
 
 ## Limits
 
@@ -103,6 +110,8 @@ Flags of `serve`: `--listen` (default `:8080`), `--settle`, `--namespace` (watch
 - The actor of a rollout or scale-down is the last spec or scale change within 10 minutes before the deletion. Two changes close together are not separated.
 - DaemonSet rollouts, Job pod deletions and node-pressure evictions caused by memory or disk on the node are classified from the generic evidence; only the ephemeral-storage eviction is covered by the end-to-end test. `NodeShutdown` and `PodGarbageCollected` are covered by unit tests only.
 - Init containers and ephemeral containers are not inspected.
+- A container that the kernel OOM killer hits in a child process can be reported as `ContainerExited` with exit code 137 when the runtime does not mark it `OOMKilled`; this happened once in the e2e runs with `stress`.
+- No published image; build it from the Dockerfile.
 - Not tested on managed control planes or with more than one kube-apiserver.
 
 ## License

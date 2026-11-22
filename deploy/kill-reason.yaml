@@ -60,7 +60,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: kill-reason
-          image: ghcr.io/jwrede/kill-reason:latest
+          image: REGISTRY/kill-reason:latest
           args: [serve, --listen=:8080, --settle=40s, --audit-token-file=/var/run/kill-reason/token]
           ports:
             - {name: http, containerPort: 8080}
