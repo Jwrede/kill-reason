@@ -17,6 +17,7 @@ WORKER=$CLUSTER-worker
 log() { printf '\n=== %s\n' "$*"; }
 dump() {
   set +e
+  kubectl -n kill-reason describe pods | tail -40
   kubectl -n kill-reason logs deploy/kill-reason --tail=200
   kubectl get events -A --field-selector source=kill-reason
   kubectl get pods -A -o wide
@@ -80,15 +81,13 @@ docker build -q -t kill-reason:e2e .
 kind load docker-image kill-reason:e2e --name "$CLUSTER"
 # The kube-apiserver runs in the host network and cannot resolve Service names,
 # so the Service gets a fixed ClusterIP that the audit kubeconfig points to.
-sed "s#^  selector: {app: kill-reason}#  clusterIP: $SVC_IP\n  selector: {app: kill-reason}#" deploy/kill-reason.yaml | kubectl apply -f -
+# kill-reason runs on the control-plane node so that drain and taint tests on
+# the worker do not touch it.
+python3 e2e/e2e-manifest.py "$SVC_IP" < deploy/kill-reason.yaml > /tmp/$CLUSTER-kill-reason.yaml
+kubectl create namespace kill-reason --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n kill-reason create secret generic kill-reason-audit-token --from-literal=token="$TOKEN" --dry-run=client -o yaml | kubectl apply -f -
-kubectl -n kill-reason patch deployment kill-reason --type=json -p '[
-  {"op":"replace","path":"/spec/template/spec/containers/0/image","value":"kill-reason:e2e"},
-  {"op":"replace","path":"/spec/template/spec/containers/0/args","value":["serve","--listen=:8080","--settle=8s","--audit-token-file=/var/run/kill-reason/token"]},
-  {"op":"add","path":"/spec/template/spec/nodeSelector","value":{"node-role.kubernetes.io/control-plane":""}},
-  {"op":"add","path":"/spec/template/spec/tolerations","value":[{"key":"node-role.kubernetes.io/control-plane","operator":"Exists","effect":"NoSchedule"}]}
-]'
-kubectl -n kill-reason rollout status deploy/kill-reason --timeout=180s
+kubectl apply -f /tmp/$CLUSTER-kill-reason.yaml
+kubectl -n kill-reason rollout status deploy/kill-reason --timeout=180s || fail "kill-reason did not become ready"
 audit_received() {
   kubectl get --raw "/api/v1/namespaces/kill-reason/services/http:kill-reason:80/proxy/metrics" | grep -E '^kill_reason_audit_records_received [1-9]'
 }
