@@ -33,29 +33,29 @@ func TestWebhook(t *testing.T) {
 	s.now = func() time.Time { return time.Date(2026, 11, 22, 10, 1, 0, 0, time.UTC) }
 
 	for _, tc := range []struct {
-		auth string
-		code int
-	}{{"", 401}, {"Bearer wrong", 401}, {"Bearer secret", 200}} {
-		req := httptest.NewRequest(http.MethodPost, "/audit", strings.NewReader(batch))
+		path, auth string
+		code       int
+	}{{"/audit", "", 401}, {"/audit", "Bearer wrong", 401}, {"/audit/wrong", "", 401}, {"/audit/", "", 401}, {"/audit/secret", "", 200}, {"/audit", "Bearer secret", 200}} {
+		req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(batch))
 		if tc.auth != "" {
 			req.Header.Set("Authorization", tc.auth)
 		}
 		w := httptest.NewRecorder()
 		s.ServeHTTP(w, req)
 		if w.Code != tc.code {
-			t.Fatalf("auth %q: code %d, want %d", tc.auth, w.Code, tc.code)
+			t.Fatalf("%s auth %q: code %d, want %d", tc.path, tc.auth, w.Code, tc.code)
 		}
 	}
-	if got := s.Received(); got != 3 {
-		t.Fatalf("received %d relevant records, want 3 (eviction, impersonated delete, alice patch)", got)
+	if got := s.Received(); got != 6 {
+		t.Fatalf("received %d relevant records, want 6 (eviction, impersonated delete, alice patch, twice)", got)
 	}
 	from, to := time.Date(2026, 11, 22, 9, 59, 0, 0, time.UTC), time.Date(2026, 11, 22, 10, 1, 0, 0, time.UTC)
 	ev := s.ForPod("shop", "web-1", from, to)
-	if len(ev) != 1 || ev[0].User != "bob" || ev[0].Subresource != "eviction" || ev[0].Code != 201 {
+	if len(ev) != 2 || ev[0].User != "bob" || ev[0].Subresource != "eviction" || ev[0].Code != 201 {
 		t.Fatalf("web-1 records: %+v", ev)
 	}
 	del := s.ForPod("shop", "web-2", from, to)
-	if len(del) != 1 || del[0].User != "alice (impersonated by kubernetes-admin)" {
+	if len(del) != 2 || del[0].User != "alice (impersonated by kubernetes-admin)" {
 		t.Fatalf("web-2 records: %+v", del)
 	}
 	ch := s.LastChange("deployments", "shop", "web", from, to)

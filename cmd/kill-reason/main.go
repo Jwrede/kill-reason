@@ -77,7 +77,7 @@ func serve(args []string) error {
 	listen := fs.String("listen", ":8080", "address for /audit, /api/v1/terminations, /metrics, /healthz")
 	settle := fs.Duration("settle", 40*time.Second, "wait this long after a termination before classifying it (must exceed --audit-webhook-batch-max-wait)")
 	ns := fs.String("namespace", "", "watch only this namespace")
-	tokenFile := fs.String("audit-token-file", "", "require this bearer token on /audit")
+	tokenFile := fs.String("audit-token-file", "", "require this token on /audit (bearer header or /audit/<token>)")
 	keep := fs.Duration("audit-retention", 15*time.Minute, "how long to keep audit records")
 	kubeconfig := fs.String("kubeconfig", "", "kubeconfig (default: in-cluster or $KUBECONFIG)")
 	noEvents := fs.Bool("no-events", false, "do not create Kubernetes Events")
@@ -104,6 +104,7 @@ func serve(args []string) error {
 
 	mux := http.NewServeMux()
 	mux.Handle("/audit", store)
+	mux.Handle("/audit/", store)
 	mux.HandleFunc("/api/v1/terminations", rec.ServeAPI)
 	mux.HandleFunc("/metrics", rec.ServeMetrics(func() map[string]float64 {
 		return map[string]float64{"kill_reason_audit_records_received": float64(store.Received())}

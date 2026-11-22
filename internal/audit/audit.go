@@ -134,14 +134,21 @@ func (s *Store) Received() int64 {
 	return s.received
 }
 
-// ServeHTTP accepts an audit.k8s.io/v1 EventList from the webhook backend.
+// ServeHTTP accepts an audit.k8s.io/v1 EventList from the webhook backend on
+// /audit or /audit/<token>.
 func (s *Store) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
 	if s.token != "" {
+		// The kube-apiserver does not send a bearer token to a plain http
+		// webhook, so the token may also be the last path segment
+		// (server: http://<ip>/audit/<token> in the webhook kubeconfig).
 		got := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if p := strings.TrimPrefix(r.URL.Path, "/audit/"); p != r.URL.Path && p != "" {
+			got = p
+		}
 		if subtle.ConstantTimeCompare([]byte(got), []byte(s.token)) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return

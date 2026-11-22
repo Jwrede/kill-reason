@@ -1,15 +1,16 @@
 # kubeconfig for --audit-webhook-config-file. The kube-apiserver usually runs in the host
 # network, where cluster DNS names do not resolve: use the Service's ClusterIP.
+# Over plain http the kube-apiserver does not send a bearer token, so the token
+# is the last path segment.
 apiVersion: v1
 kind: Config
 clusters:
   - name: kill-reason
     cluster:
-      server: http://CLUSTER_IP/audit
+      server: http://CLUSTER_IP/audit/AUDIT_TOKEN
 users:
   - name: kill-reason
-    user:
-      token: AUDIT_TOKEN
+    user: {}
 contexts:
   - name: kill-reason
     context: {cluster: kill-reason, user: kill-reason}
