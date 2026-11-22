@@ -21,6 +21,10 @@ dump() {
   kubectl -n kill-reason logs deploy/kill-reason --tail=200
   kubectl get events -A --field-selector source=kill-reason
   kubectl get pods -A -o wide
+  echo "--- from the control-plane node to $SVC_IP"
+  docker exec "$CP" curl -sS -m 5 "http://$SVC_IP/metrics"
+  echo "--- kube-apiserver log lines about audit"
+  docker exec "$CP" sh -c 'crictl logs $(crictl ps -q --name kube-apiserver) 2>&1 | grep -i audit | tail -20'
 }
 fail() { echo "FAIL: $*" >&2; dump; exit 1; }
 cleanup() { [ "${KEEP_CLUSTER:-}" = 1 ] || kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true; }
@@ -88,8 +92,10 @@ kubectl create namespace kill-reason --dry-run=client -o yaml | kubectl apply -f
 kubectl -n kill-reason create secret generic kill-reason-audit-token --from-literal=token="$TOKEN" --dry-run=client -o yaml | kubectl apply -f -
 kubectl apply -f /tmp/$CLUSTER-kill-reason.yaml
 kubectl -n kill-reason rollout status deploy/kill-reason --timeout=180s || fail "kill-reason did not become ready"
+# Read the counter from the control-plane node, the same network path the
+# kube-apiserver uses for the audit webhook.
 audit_received() {
-  kubectl get --raw "/api/v1/namespaces/kill-reason/services/http:kill-reason:80/proxy/metrics" | grep -E '^kill_reason_audit_records_received [1-9]'
+  docker exec "$CP" curl -sS -m 5 "http://$SVC_IP/metrics" | grep -E '^kill_reason_audit_records_received [1-9]'
 }
 
 log "test users: alice may edit namespace $NS, bob is cluster-admin (for drain)"
